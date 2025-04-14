@@ -1,0 +1,71 @@
+name: Software Composition Analysis
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        project: 
+          - damn-vulnerable-js-sca
+          - WebGoat
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js for Cdxgen
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+      
+      - name: Install Cdxgen
+        run: npm install -g @cyclonedx/cdxgen
+
+      - name: Generate BOM
+        working-directory: ${{ matrix.project }}
+        env:
+          SBOM_SIGN_ALGORITHM: ${{ secrets.SBOM_SIGN_ALGORITHM }}
+          SBOM_SIGN_PRIVATE_KEY: ${{ secrets.SBOM_SIGN_PRIVATE_KEY }}
+          SBOM_SIGN_PUBLIC_KEY: ${{ secrets.SBOM_SIGN_PUBLIC_KEY }}
+        run: |
+          mkdir reports
+          cdxgen --output ./reports/bom.json
+          cdxgen --generate-key-and-sign --output ./reports/signedbom.json
+          
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+      
+      - name: Install Dep-scan Dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools check-jsonschema owasp-depscan
+
+
+      - name: "Run dep-scan on project: ${{ matrix.project }}"
+        working-directory: ${{ matrix.project }}
+        run: |
+          depscan --src . --bom ./reports/bom.json -o ./reports/depscan --csaf
+          depscan --src . --bom ./reports/bom.json -o ./reports/depscan --csaf
+          depscan --profile research --src . --bom ./reports/bom.json -o ./reports/depscan --explain
+          
+
+      - name: Validate CSAF output
+        working-directory: ${{ matrix.project }}
+        run: |
+          curl -o csaf_schema.json https://raw.githubusercontent.com/oasis-tcs/csaf/master/csaf_2.0/json_schema/csaf_json_schema.json
+          # check-jsonschema --schemafile csaf_schema.json ./reports/csaf_v2.json
+
+
+      - name: Upload scan results
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.project }}-csaf-report
+          path: ${{ matrix.project }}/reports/
+
